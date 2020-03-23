@@ -5,3 +5,7 @@
 antlr4
 dd
 numpy
+
+## Running:
+
+Run parity_game.py with file input in PGsolver input format
