@@ -1,6 +1,6 @@
-BDD based Parity Game Solver using Zielonka's algorithm
+## BDD based Parity Game Solver using Zielonka's algorithm
 
-Requirements:
+## Requirements:
 
 antlr4
 dd
