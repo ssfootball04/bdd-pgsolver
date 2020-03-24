@@ -64,9 +64,7 @@ def main(argv):
 	####     helper fns 	  	  #####
 	###################################
 
-	# convert a tuple(var, owner, nodeInd) into its symbolic representation
-	# varType: 'x' | 'X'; owner: True | False; nodeInd < numActualNodes
-	# uses simple binary encoding described in the lecture
+	# maps a node index to its binary encoding
 	def createSymbolicString(varType, owner, nodeInd):
 
 		nodeStr = bin(nodeInd)[2:].zfill( numVariables - 1 )
@@ -75,36 +73,44 @@ def main(argv):
 			symbolicStr += ' /\ {}{}'.format(varType, i+1) if bool(int(nodeStr[i])) else ' /\ ~{}{}'.format(varType, i+1)
 		return symbolicStr
 
-	def applyBooleanOp(listFormulas, op):
-		numFormulas = len(listFormulas)
+	# applies a boolean op to a list of formula strings
+	def applyBooleanOp(listFormulaStrings, op):
+		numFormulas = len(listFormulaStrings)
 
 		if(numFormulas==0):
 			return ''
 
 		symbolicStr = ''
-		for ind, formula in enumerate(listFormulas):
+		for ind, formula in enumerate(listFormulaStrings):
 			if (ind == numFormulas - 1):
 				symbolicStr += '( {} )'.format(formula)
 			else:
 				symbolicStr += '( {} ) {} '.format(formula, op)
 		return symbolicStr
 
+	# maps a truth assignment to the node index as per the binary encoding
 	def assignmentToNodeInd(assignment, primed=True):
 		s = ''
-		p = 'X' if primed else 'x'
+		x = 'X' if primed else 'x'
 		for i in range(1, numVariables):
-			s += '1' if assignment[p + str(i)] else '0'
+			s += '1' if assignment[x + str(i)] else '0'
 		return int(s, 2)
 
-	def getStatesForPrinting(formula, primed=True):
-		p = 'X' if primed else 'x'
-		assignments = list(bdd.pick_iter(formula, care_vars=['{}{}'.format(p, i) for i in range(numVariables)]))
+	# returns the set of states corresponding to a bdd expression
+	def getStatesForPrinting(expression, primed=True):
+
+		x = 'X' if primed else 'x'
+		assignments = list(bdd.pick_iter(expression, care_vars=['{}{}'.format(x, i) for i in range(numVariables)]))
 		states, statesStr = [], '{'
 		for assignment in assignments:
 			states.append(assignmentToNodeInd(assignment, primed=primed))
 		states = np.sort(np.array(states))[::-1]
+
 		for state in states:
 			statesStr += str(state) + ', '
+		if(len(statesStr)!=1):
+			statesStr = statesStr[:-2]
+
 		return statesStr + '}'
 
 	bdd = _bdd.BDD()
@@ -117,15 +123,12 @@ def main(argv):
 	p0Nodes, p1Nodes = np.array(nodeList)[np.array(ownerList) == False], np.array(nodeList)[np.array(ownerList) == True]
 	p0NodesSymbolicStr = applyBooleanOp([createSymbolicString('x', False, p0Node) for p0Node in p0Nodes], '\/')
 	p1NodesSymbolicStr = applyBooleanOp([createSymbolicString('x', True, p1Node) for p1Node in p1Nodes], '\/')
-	nextStatesSymbolicStr = applyBooleanOp([createSymbolicString('X', False, p0Node) for p0Node in p0Nodes] +
-									[createSymbolicString('X', True, p1Node) for p1Node in p1Nodes], '\/')
-
+	
 	V_0 = bdd.add_expr(p0NodesSymbolicStr) if len(p0NodesSymbolicStr) > 0 else bdd.false
 	V_1 = bdd.add_expr(p1NodesSymbolicStr) if len(p1NodesSymbolicStr) > 0 else bdd.false
-	V_next = bdd.add_expr(nextStatesSymbolicStr)
 	
 	###################################
-	####     edge function 	  	  #####
+	####     edge set	 	  	  #####
 	###################################
 
 	edges = []
@@ -141,6 +144,10 @@ def main(argv):
 
 	E = bdd.add_expr(edgeSetSymbolicStr)
 
+	##########################################################
+	####     			solve game 	  	  				 #####
+	##########################################################
+
 	prime = {}  # priming dictionary
 	for i in range(numVariables):
 		prime['x{}'.format(i)] = 'X{}'.format(i)
@@ -152,34 +159,47 @@ def main(argv):
 	def attractor(player, region, V_0, V_1, V, E, debug=False):
 
 		reachStates = region
-		V_alp = V_1 if player else V_0
-		V_bet = V_0 if player else V_1
+		V_player = V_1 if player else V_0
+		V_opponent = V_0 if player else V_1
 
 		previousAttractor = bdd.false
 		currentAttractor = reachStates
 		while( previousAttractor != currentAttractor):											   # fpi
 
-			previousAttractor = currentAttractor												   # compute previous states
+			previousAttractor = currentAttractor
 
-			player_nodes = (V_alp & bdd.exist(['X{}'.format(i) for i in range(numVariables)], E & currentAttractor))
-			opponent_nodes = (V_bet & ~bdd.exist(['X{}'.format(i) for i in range(numVariables)], E & (~currentAttractor & V)))
-			previousStates = player_nodes | opponent_nodes
+			previousStates_player = (V_player & bdd.exist(['X{}'.format(i) for i in range(numVariables)], E & currentAttractor))
+			previousStates_opponent = (V_opponent & ~bdd.exist(['X{}'.format(i) for i in range(numVariables)], E & (~currentAttractor & V)))
 
-			if (debug):
-				print('Nodes from player: ', getStatesForPrinting(player_nodes, False))
-				print('Nodes from opponent: ', getStatesForPrinting(opponent_nodes, False))
-				print('Previous states are: ', getStatesForPrinting(previousStates, False))
-
+			previousStates = previousStates_player | previousStates_opponent					   # compute previous states
 			previousStatesPrimed = bdd.let(prime, previousStates)								   # prime previous states
 			currentAttractor = previousStatesPrimed | currentAttractor							   # take union of newfoundstates and previousAttractor
 
 		return currentAttractor
 
+	###################################
+	####     setminus	op 	  	  #####
+	###################################
+
+	def setminus(region, V_0, V_1, nodemask):
+
+		new_V0 = V_0 & ~region
+		new_V1 = V_1 & ~region
+		
+		# calculate new node mask
+		regionAssignments = list(bdd.pick_iter(region, care_vars=['X{}'.format(i) for i in range(numVariables)]))
+		removeNodes = [assignmentToNodeInd(assignment, primed=True) for assignment in regionAssignments]
+		new_nodeMask = copy.deepcopy(nodeMask)
+		for nodeInd in removeNodes:
+			new_nodeMask[nodePosDict[nodeInd]] = False
+
+		return new_V0, new_V1, new_nodeMask
 
 	###################################
-	####     solve game 	  	  #####
+	####     color inverse 	  	  #####
 	###################################
 
+	# find set of nodes of a given color in the graph
 	def colorInverse(color, nodeMask):
 
 		region = copy.deepcopy(colorDict[color])
@@ -191,135 +211,60 @@ def main(argv):
 			region.remove(nodeInd)
 		return region
 
+	###################################
+	####  zielonka's algorithm    #####
+	###################################
+
 	def zielonka(V_0, V_1, E, nodeMask, debug=False):
 
 		if( (V_0 == bdd.false ) & (V_1 == bdd.false) ):
 			return bdd.false, bdd.false
 
-		if (debug):
-			print('Starting Zielonka')
-
 		d = np.array(colorList)[nodeMask].max()
 		i = d % 2
 		j = 1 - i
 
-		if (debug):
-			print('Max color: {}, i: {}, j:{}'.format(d,i,j))
-
 		V_0primed = bdd.let(prime, V_0)
 		V_1primed = bdd.let(prime, V_1)
-		allNodes = V_0primed | V_1primed
-
-		if (debug):
-			print('All nodes are: ', getStatesForPrinting(allNodes))
+		V = V_0primed | V_1primed
 
 		region = colorInverse(d, nodeMask)
 		regionSymbolicStr = applyBooleanOp([createSymbolicString('X', ownerList[nodePosDict[nodeInd]], nodeInd)
 											for nodeInd in region], '\/')
 		regionNodes = bdd.add_expr(regionSymbolicStr)
-
-		if (debug):
-			print('Nodes with color {} in G_0: {}'.format(d, getStatesForPrinting(regionNodes)))
-
-		regionAttractor = attractor(i, regionNodes, V_0, V_1, allNodes, E)
-
-		if (debug):
-			print('Attractor of nodes with color {} in G_0: {}'.format(d, getStatesForPrinting(regionAttractor)))
-
-		if(regionAttractor == allNodes):
-
-			if (debug):
-				print('Solution is easy. No need to compute G1. {} wins.'.format(i))
+		regionAttractor = attractor(i, regionNodes, V_0, V_1, V, E)
+		
+		if(regionAttractor == V):
 
 			if(i==0):
-
-				return allNodes, bdd.false
-
+				return V, bdd.false
 			else:
-
-				return bdd.false, allNodes
+				return bdd.false, V
+		
 		else:
 
-			if (debug):
-				print('Computing G1.')
-
-			regionAssignments = list(bdd.pick_iter(regionAttractor, care_vars=['X{}'.format(i) for i in range(numVariables)]))
-			removeNodes = [assignmentToNodeInd(assignment, primed=True) for assignment in regionAssignments]
-			G1_nodeMask = copy.deepcopy(nodeMask)
-			for nodeInd in removeNodes:
-				G1_nodeMask[nodePosDict[nodeInd]] = False
-			removeNodesSymbolicStr = applyBooleanOp([createSymbolicString('x', ownerList[nodePosDict[nodeInd]], nodeInd)
-											for nodeInd in removeNodes], '\/')
-			removeSet = bdd.add_expr(removeNodesSymbolicStr)
-			G1_V0 = V_0 & ~removeSet
-			G1_V1 = V_1 & ~removeSet
-
-			if(debug):
-				print('Nodes to remove: ', getStatesForPrinting(removeSet, False))
-				print('G1_V0 nodes: ', getStatesForPrinting(G1_V0, False))
-				print('G1_V1 nodes: ', getStatesForPrinting(G1_V1, False))
-				print('Running Zielonka on G1.')
-
+			G1_V0, G1_V1, G1_nodeMask = setminus(regionAttractor, V_0, V_1, nodeMask)
 			wr_G1_V0, wr_G1_V1 = zielonka(G1_V0, G1_V1, E, G1_nodeMask, debug)
 
-			if(debug):
-				print('Zielonka on G1 completed.')
-				print('wr_G1_V0 is: ', getStatesForPrinting(wr_G1_V0))
-				print('wr_G1_V1 is: ', getStatesForPrinting(wr_G1_V1))
-
 			if( (j==1) & (wr_G1_V1 == bdd.false)):
-
-				if (debug):
-					print('Solution is easy. No need to compute G2. {} wins.'.format(0))
-
-				return allNodes, bdd.false
-
+				
+				return V, bdd.false
+			
 			elif( (j==0) & (wr_G1_V0 == bdd.false)):
-
-				if (debug):
-					print('Solution is easy. No need to compute G2. {} wins.'.format(1))
-
-				return bdd.false, allNodes
-
+			
+					return bdd.false, V
 			else:
 
-				if (debug):
-					print('Computing G2.')
-
 				wr_G1_j = wr_G1_V1 if j==1 else wr_G1_V0
-				wr_G1_j_attractor = attractor(j,wr_G1_j,V_0,V_1, allNodes, E)
+				wr_G1_j_attractor = attractor(j,wr_G1_j,V_0,V_1, V, E)
 
-				regionAssignments = list(bdd.pick_iter(wr_G1_j_attractor, care_vars=['X{}'.format(i) for i in range(numVariables)]))
-				removeNodes = [assignmentToNodeInd(assignment, primed=True) for assignment in regionAssignments]
-				G2_nodeMask = copy.deepcopy(nodeMask)
-				for nodeInd in removeNodes:
-					G2_nodeMask[nodePosDict[nodeInd]] = False
-				removeNodesSymbolicStr = applyBooleanOp([createSymbolicString('x', ownerList[nodePosDict[nodeInd]], nodeInd)
-					 							for nodeInd in removeNodes], '\/')
-				removeSet = bdd.add_expr(removeNodesSymbolicStr)
-				G2_V0 = V_0 & ~removeSet
-				G2_V1 = V_1 & ~removeSet
-
-				if (debug):
-					print('Nodes to remove: ', getStatesForPrinting(removeSet, False))
-					print('G2_V0 nodes: ', getStatesForPrinting(G2_V0, False))
-					print('G2_V1 nodes: ', getStatesForPrinting(G2_V1, False))
-					print('Running Zielonka on G2.')
-
+				G2_V0, G2_V1, G2_nodeMask = setminus(wr_G1_j_attractor, V_0, V_1, nodeMask)
 				wr_G2_V0, wr_G2_V1 = zielonka(G2_V0, G2_V1, E, G2_nodeMask, debug)
 
-				if (debug):
-					print('Zielonka on G2 completed.')
-					print('wr_G2_V0 is: ', getStatesForPrinting(wr_G2_V0))
-					print('wr_G2_V1 is: ', getStatesForPrinting(wr_G2_V1))
-
 				if(i==0):
-
-					return wr_G2_V0, allNodes & ~wr_G2_V0
-
+					return wr_G2_V0, V & ~wr_G2_V0
 				else:
-
-					return allNodes & ~wr_G2_V1, wr_G2_V1
+					return V & ~wr_G2_V1, wr_G2_V1
 
 	nodeMask = np.array([True for i in range(numActualNodes)])
 	wr_v0, wr_v1 = zielonka(V_0,V_1,E,nodeMask, debug=False)
