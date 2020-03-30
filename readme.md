@@ -2,10 +2,14 @@
 
 ## Requirements:
 
+python3
+
 antlr4
+
 dd
+
 numpy
 
 ## Running:
 
-Run parity_game.py with file input in PGsolver input format
+python3 parity_game.py < your_favourite_parity_game.gm
