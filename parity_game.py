@@ -17,7 +17,8 @@ def main(argv):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--game_path', type=str, default=None, help='path to game specification')
-    parser.add_argument('--algorithm', type=str, default='zielonka', help='zielonka | QPZ')
+    parser.add_argument('--algorithm', type=str, default='zielonka', help='zielonka | qpz')
+    parser.add_argument('--extract_strategy', dest='extract_strategy', action='store_true', help='extract strategies')
     opt = parser.parse_args()
 
     print("\n==================Options=================")
@@ -127,7 +128,18 @@ def main(argv):
         if (len(statesStr) != 1):
             statesStr = statesStr[:-2]
 
-        return statesStr + '}'
+        return statesStr + '}', states
+
+    def printStrategy(states, strategyDict):
+
+        print('with strategy')
+        strategyStr = '['
+        for state in states[::-1]:
+            strategyStr += str(state) + '->' + str(strategyDict[state]) + ','
+        if (len(strategyStr) != 1):
+            strategyStr = strategyStr[:-1]
+        strategyStr = strategyStr + ']'
+        print(strategyStr)
 
     bdd = _bdd.BDD()
     bdd.declare(*variableList)
@@ -343,30 +355,75 @@ def main(argv):
 
         return result, i
 
+    ###################################
+    ####  strategy extraction     #####
+    ###################################
+
+    def strategy_extraction(wr_v0, wr_v1):
+
+        #iterate over all nodes, create boolean variable, find edge strategy,
+        # print strategy in ascending order
+
+        strategyDict = {}
+        for i in range(numActualNodes):
+
+            nodeInd, owner = nodeList[i], ownerList[i]
+            nodeSymbolicStr = createSymbolicString('x', owner, nodeInd)
+            bddNode = bdd.add_expr(nodeSymbolicStr)
+            bddNodePrimed = bdd.let(prime, bddNode)
+            nodeLoc = True if ( (bddNodePrimed & wr_v0) == bdd.false ) else False
+            transitions = ( ( E & bddNode ) & wr_v1 ) if nodeLoc else ( ( E & bddNode ) & wr_v0 )
+            choices = list(bdd.pick_iter(transitions, care_vars=['{}{}'.format('x', i) for i in range(numVariables)]
+                                                                + ['{}{}'.format('X', i) for i in range(numVariables)]))
+            if(len(choices) > 0):
+                strategyDict[nodeInd] = assignmentToNodeInd(choices[0], primed=True)
+
+        return strategyDict
+
+    ############################
+    ###### solving #############
+    ############################
+
+    print('Solving game.\n')
+
+    # run algorithms
     if(opt.algorithm == 'zielonka'):
 
         nodeMask = np.array([True for i in range(numActualNodes)])
         wr_v0, wr_v1 = zielonka(V_0, V_1, E, nodeMask)
 
-        print("Player 0 wins from nodes:")
-        statesStr = getStatesForPrinting(wr_v0)
-        print(statesStr)
-
-        print("Player 1 wins from nodes:")
-        statesStr = getStatesForPrinting(wr_v1)
-        print(statesStr)
-
-    elif(opt.algorithm == 'QPZ'):
+    elif(opt.algorithm == 'qpz'):
 
         nodeMask = np.array([True for i in range(numActualNodes)])
         wr, i = QPZ(V_0, V_1, E, nodeMask, numActualNodes, numActualNodes)
-
-        print("Player {} wins from nodes:".format(i))
-        statesStr = getStatesForPrinting(wr)
-        print(statesStr)
+        wr_j_V0, wr_j_V1, _ = setminus(wr, V_0, V_1, nodeMask)
+        wr_j = bdd.let(prime, wr_j_V0) | bdd.let(prime, wr_j_V1)
+        wr_v0, wr_v1 = (wr, wr_j) if i==0 else (wr_j, wr)
 
     else:
         raise Exception('Invalid algorithm. Available options: zielonka | QPZ')
+
+    # extract strategies
+    if (opt.extract_strategy):
+        strategyDict = strategy_extraction(wr_v0, wr_v1)
+
+
+    # print solutions
+    print("Player 0 wins from nodes:")
+    statesStr, wr_states = getStatesForPrinting(wr_v0)
+    print(statesStr)
+
+    if (opt.extract_strategy):
+        printStrategy(wr_states, strategyDict)
+
+    print('')
+
+    print("Player 1 wins from nodes:")
+    statesStr, wr_states = getStatesForPrinting(wr_v1)
+    print(statesStr)
+
+    if (opt.extract_strategy):
+        printStrategy(wr_states, strategyDict)
 
 if __name__ == '__main__':
     main(sys.argv)
