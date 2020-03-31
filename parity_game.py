@@ -6,13 +6,26 @@ from parity_gameParser import parity_gameParser
 from dd import autoref as _bdd
 import numpy as np
 import copy
+import argparse
 import sys
+from pprint import pprint
 
 sys.setrecursionlimit(3500)
 
 
 def main(argv):
-    input_stream = StdinStream()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--game_path', type=str, default=None, help='path to game specification')
+    parser.add_argument('--algorithm', type=str, default='zielonka', help='zielonka | QPZ')
+    opt = parser.parse_args()
+
+    print("\n==================Options=================")
+    pprint(vars(opt), indent=4)
+    print("==========================================\n")
+
+    # input_stream = StdinStream()
+    input_stream = FileStream(opt.game_path)
     lexer = parity_gameLexer(input_stream)
     stream = CommonTokenStream(lexer)
     parser = parity_gameParser(stream)
@@ -187,6 +200,9 @@ def main(argv):
 
     def setminus(region, V_0, V_1, nodeMask):
 
+        if (region == bdd.false):
+            return V_0, V_1, nodeMask
+
         # calculate new node mask
         regionAssignments = list(bdd.pick_iter(region, care_vars=['X{}'.format(i) for i in range(numVariables)]))
         removeNodes = [assignmentToNodeInd(assignment, primed=True) for assignment in regionAssignments]
@@ -274,17 +290,83 @@ def main(argv):
                 else:
                     return V & ~wr_G2_V1, wr_G2_V1
 
-    nodeMask = np.array([True for i in range(numActualNodes)])
-    wr_v0, wr_v1 = zielonka(V_0, V_1, E, nodeMask)
+    ###################################
+    ####  QPZ algorithm    		  #####
+    ###################################
 
-    print("Player 0 wins from nodes:")
-    statesStr = getStatesForPrinting(wr_v0)
-    print(statesStr)
+    def QPZ(V_0, V_1, E, nodeMask, p_0, p_1, debug=False):
 
-    print("Player 1 wins from nodes:")
-    statesStr = getStatesForPrinting(wr_v1)
-    print(statesStr)
+        if ((V_0 == bdd.false) & (V_1 == bdd.false)):
+            return bdd.false, 0                                                # return winning region, Player i
 
+        V_0primed = bdd.let(prime, V_0)
+        V_1primed = bdd.let(prime, V_1)
+        V = V_0primed | V_1primed
+
+        d = np.array(colorList)[nodeMask].max()
+        i = d % 2
+        j = 1 - i
+        p_j = p_1 if (i == 0) else p_0
+        p_0_new = p_0 if (i == 0) else p_0 // 2
+        p_1_new = p_1 // 2 if (i == 0) else p_1
+
+        if ((d == 0) or (p_j == 0)):
+            return V, 0
+
+        qpz_1, _ = QPZ(V_0, V_1, E, nodeMask, p_0_new, p_1_new)
+        wr_j_V0, wr_j_V1, _ = setminus(qpz_1, V_0, V_1, nodeMask)
+        wr_j = bdd.let(prime, wr_j_V0) | bdd.let(prime, wr_j_V1)
+
+        A = attractor(j, wr_j, V_0, V_1, V, E)
+        G1_V0, G1_V1, G1_nodeMask = setminus(A, V_0, V_1, nodeMask)
+        G1_V = bdd.let(prime, G1_V0) | bdd.let(prime, G1_V1)
+
+        colorSet = colorInverse(d, nodeMask)
+        colorSetSymbolicStr = applyBooleanOp([createSymbolicString('X', ownerList[nodePosDict[nodeInd]], nodeInd)
+                                              for nodeInd in colorSet], '\/')
+        colorSetNodes = bdd.add_expr(colorSetSymbolicStr)
+        colorSetAttractor = attractor(i, colorSetNodes, V_0, V_1, V, E)
+
+        G2_V0, G2_V1, G2_nodeMask = setminus(colorSetAttractor, G1_V0, G1_V1, G1_nodeMask)
+
+        wr_j_G2, _ = QPZ(G2_V0, G2_V1, E, G2_nodeMask, p_0, p_1)
+        A_2 = attractor(j, wr_j_G2, G1_V0, G1_V1, G1_V, E)
+
+        G3_V0, G3_V1, G3_nodeMask = setminus(A_2, G1_V0, G1_V1, G1_nodeMask)
+
+        qpz_G3, _ = QPZ(G3_V0, G3_V1, E, G3_nodeMask, p_0_new, p_1_new)
+        wr_j3_V0, wr_j3_V1, wr_j3_nodeMask = setminus(A & A_2 & qpz_G3, V_0, V_1, nodeMask)
+        wr_j3 = bdd.let(prime, wr_j3_V0) | bdd.let(prime, wr_j3_V1)
+
+        result_V0, result_V1, _ = setminus(A & A_2 & wr_j3, V_0, V_1, nodeMask)
+        result = bdd.let(prime, result_V0) | bdd.let(prime, result_V1)
+
+        return result, i
+
+    if(opt.algorithm == 'zielonka'):
+
+        nodeMask = np.array([True for i in range(numActualNodes)])
+        wr_v0, wr_v1 = zielonka(V_0, V_1, E, nodeMask)
+
+        print("Player 0 wins from nodes:")
+        statesStr = getStatesForPrinting(wr_v0)
+        print(statesStr)
+
+        print("Player 1 wins from nodes:")
+        statesStr = getStatesForPrinting(wr_v1)
+        print(statesStr)
+
+    elif(opt.algorithm == 'QPZ'):
+
+        nodeMask = np.array([True for i in range(numActualNodes)])
+        wr, i = QPZ(V_0, V_1, E, nodeMask, numActualNodes, numActualNodes)
+
+        print("Player {} wins from nodes:".format(i))
+        statesStr = getStatesForPrinting(wr)
+        print(statesStr)
+
+    else:
+        raise Exception('Invalid algorithm. Available options: zielonka | QPZ')
 
 if __name__ == '__main__':
     main(sys.argv)
