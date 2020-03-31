@@ -12,4 +12,4 @@ numpy
 
 ## Running:
 
-python3 parity_game.py < your_favourite_parity_game.gm
+python3 parity_game.py --game_path <your_favourite_parity_game.gm> --algorithm <zielonka|QPZ>
