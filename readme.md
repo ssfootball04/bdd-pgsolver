@@ -1,4 +1,4 @@
-## BDD based Parity Game Solver using Zielonka's algorithm
+## BDD based Parity Game Solver
 
 ## Requirements:
 
