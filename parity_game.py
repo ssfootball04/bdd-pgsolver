@@ -361,9 +361,6 @@ def main(argv):
 
     def strategy_extraction(wr_v0, wr_v1):
 
-        #iterate over all nodes, create boolean variable, find edge strategy,
-        # print strategy in ascending order
-
         strategyDict = {}
         for i in range(numActualNodes):
 
@@ -401,7 +398,7 @@ def main(argv):
         wr_v0, wr_v1 = (wr, wr_j) if i==0 else (wr_j, wr)
 
     else:
-        raise Exception('Invalid algorithm. Available options: zielonka | QPZ')
+        raise Exception('Invalid algorithm. Available options: zielonka | qpz')
 
     # extract strategies
     if (opt.extract_strategy):
